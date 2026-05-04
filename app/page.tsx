@@ -249,7 +249,7 @@ export default function HomePage() {
               Challenge Investment
             </p>
             <div className="flex items-end gap-2">
-              <span className="font-serif text-7xl font-bold text-bone leading-none">$397</span>
+              <span className="font-serif text-7xl font-bold text-bone leading-none">$597</span>
               <span className="text-bone/40 text-sm mb-2 font-light">one time</span>
             </div>
             <div className="h-px bg-bone/10" />
