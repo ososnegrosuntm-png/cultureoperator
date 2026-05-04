@@ -30,6 +30,7 @@ export interface Database {
           gym_id?: string | null
           updated_at?: string
         }
+        Relationships: []
       }
       gyms: {
         Row: {
@@ -59,6 +60,7 @@ export interface Database {
           email?: string | null
           logo_url?: string | null
         }
+        Relationships: []
       }
       members: {
         Row: {
@@ -66,7 +68,7 @@ export interface Database {
           gym_id: string
           profile_id: string
           membership_id: string | null
-          status: 'active' | 'inactive' | 'suspended'
+          status: 'active' | 'inactive' | 'suspended' | 'lead'
           joined_at: string
           expires_at: string | null
         }
@@ -75,15 +77,16 @@ export interface Database {
           gym_id: string
           profile_id: string
           membership_id?: string | null
-          status?: 'active' | 'inactive' | 'suspended'
+          status?: 'active' | 'inactive' | 'suspended' | 'lead'
           joined_at?: string
           expires_at?: string | null
         }
         Update: {
           membership_id?: string | null
-          status?: 'active' | 'inactive' | 'suspended'
+          status?: 'active' | 'inactive' | 'suspended' | 'lead'
           expires_at?: string | null
         }
+        Relationships: []
       }
       memberships: {
         Row: {
@@ -116,6 +119,7 @@ export interface Database {
           features?: string[]
           is_active?: boolean
         }
+        Relationships: []
       }
       check_ins: {
         Row: {
@@ -135,6 +139,7 @@ export interface Database {
         Update: {
           checked_out_at?: string | null
         }
+        Relationships: []
       }
       classes: {
         Row: {
@@ -169,6 +174,7 @@ export interface Database {
           scheduled_at?: string
           location?: string | null
         }
+        Relationships: []
       }
       class_bookings: {
         Row: {
@@ -188,7 +194,20 @@ export interface Database {
         Update: {
           status?: 'confirmed' | 'cancelled' | 'waitlist'
         }
+        Relationships: []
       }
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      [_ in never]: never
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
     }
   }
 }
