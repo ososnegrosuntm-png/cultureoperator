@@ -60,7 +60,6 @@ function MemberPanel({
   const p = member.profile
   const name = p?.full_name || 'Unknown Member'
   const phone = fmtPhone(p?.phone)
-  const meta = STATUS_META[member.status] ?? STATUS_META.suspended
 
   // Close on Escape key
   useEffect(() => {

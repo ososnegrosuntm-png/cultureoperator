@@ -60,9 +60,13 @@ export default async function MembersPage() {
   }
 
   // Normalize the profiles relation (Supabase returns it as array or object)
-  const members: MemberRow[] = (raw ?? []).map((m: any) => ({
+  type RawRow = {
+    id: string; status: string; joined_at: string; expires_at: string | null
+    profiles: MemberRow['profile'] | MemberRow['profile'][]
+  }
+  const members: MemberRow[] = ((raw ?? []) as unknown as RawRow[]).map(m => ({
     id: m.id,
-    status: m.status,
+    status: m.status as MemberRow['status'],
     joined_at: m.joined_at,
     expires_at: m.expires_at,
     profile: Array.isArray(m.profiles) ? (m.profiles[0] ?? null) : (m.profiles ?? null),
