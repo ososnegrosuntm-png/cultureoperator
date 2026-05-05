@@ -137,18 +137,18 @@ export default async function DashboardPage() {
 
   const { data: profileData } = await supabase
     .from('profiles')
-    .select('*, gyms(*)')
+    .select('full_name')
     .eq('id', user!.id)
     .single()
 
-  const profile = profileData as {
-    full_name: string | null
-    gym_id: string | null
-    gyms: { name: string } | null
-  } | null
+  const { data: gymData } = await supabase
+    .from('gyms')
+    .select('id, name')
+    .eq('owner_id', user!.id)
+    .single()
 
-  const gymId    = profile?.gym_id ?? ''
-  const firstName = profile?.full_name?.split(' ')[0] ?? 'Coach'
+  const gymId    = gymData?.id ?? ''
+  const firstName = (profileData as { full_name: string | null } | null)?.full_name?.split(' ')[0] ?? 'Coach'
 
   const now      = new Date()
   const d30      = new Date(now); d30.setDate(now.getDate() - 30)

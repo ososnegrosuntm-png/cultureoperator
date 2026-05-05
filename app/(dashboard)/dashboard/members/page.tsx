@@ -25,13 +25,13 @@ export default async function MembersPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: profileData } = await supabase
-    .from('profiles')
-    .select('gym_id')
-    .eq('id', user.id)
+  const { data: gymData } = await supabase
+    .from('gyms')
+    .select('id')
+    .eq('owner_id', user.id)
     .single()
 
-  const gymId = profileData?.gym_id ?? ''
+  const gymId = gymData?.id ?? ''
 
   // Fetch all members joined with their profiles.
   // email / phone / instagram / birthday exist after migration 002_extend_profiles runs.

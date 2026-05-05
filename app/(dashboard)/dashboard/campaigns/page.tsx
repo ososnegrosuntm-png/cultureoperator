@@ -20,13 +20,13 @@ export default async function CampaignsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: profileData } = await supabase
-    .from('profiles')
-    .select('gym_id')
-    .eq('id', user.id)
+  const { data: gymData } = await supabase
+    .from('gyms')
+    .select('id')
+    .eq('owner_id', user.id)
     .single()
 
-  const gymId = profileData?.gym_id ?? ''
+  const gymId = gymData?.id ?? ''
 
   // Fetch inactive members with their profiles and check-in history.
   // check_ins gives us last_seen; if empty the member was never checked in.
