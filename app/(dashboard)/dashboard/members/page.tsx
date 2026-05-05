@@ -33,43 +33,38 @@ export default async function MembersPage() {
 
   const gymId = gymData?.id ?? ''
 
-  // Fetch all members joined with their profiles.
-  // email / phone / instagram / birthday exist after migration 002_extend_profiles runs.
+  // Members live in profiles, filtered by gym_id.
+  // The members table is separate; profiles is the source of truth for imported members.
   const { data: raw, error } = await supabase
-    .from('members')
-    .select(`
-      id,
-      status,
-      joined_at,
-      expires_at,
-      profiles (
-        id,
-        full_name,
-        email,
-        phone,
-        instagram,
-        birthday,
-        avatar_url
-      )
-    `)
+    .from('profiles')
+    .select('id, full_name, role, gym_id, created_at, email, phone, instagram, birthday, avatar_url')
     .eq('gym_id', gymId)
-    .order('joined_at', { ascending: false })
+    .neq('role', 'owner')
+    .order('created_at', { ascending: false })
 
   if (error) {
     console.error('Members query error:', error.message)
   }
 
-  // Normalize the profiles relation (Supabase returns it as array or object)
-  type RawRow = {
-    id: string; status: string; joined_at: string; expires_at: string | null
-    profiles: MemberRow['profile'] | MemberRow['profile'][]
+  type RawProfile = {
+    id: string; full_name: string | null; role: string; gym_id: string
+    created_at: string; email: string | null; phone: string | null
+    instagram: string | null; birthday: string | null; avatar_url: string | null
   }
-  const members: MemberRow[] = ((raw ?? []) as unknown as RawRow[]).map(m => ({
-    id: m.id,
-    status: m.status as MemberRow['status'],
-    joined_at: m.joined_at,
-    expires_at: m.expires_at,
-    profile: Array.isArray(m.profiles) ? (m.profiles[0] ?? null) : (m.profiles ?? null),
+  const members: MemberRow[] = ((raw ?? []) as unknown as RawProfile[]).map(p => ({
+    id: p.id,
+    status: 'active' as MemberRow['status'],
+    joined_at: p.created_at,
+    expires_at: null,
+    profile: {
+      id: p.id,
+      full_name: p.full_name,
+      email: p.email,
+      phone: p.phone,
+      instagram: p.instagram,
+      birthday: p.birthday,
+      avatar_url: p.avatar_url,
+    },
   }))
 
   return (
