@@ -25,45 +25,31 @@ export default async function MembersPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: gymData } = await supabase
-    .from('gyms')
-    .select('id')
-    .eq('owner_id', user.id)
-    .single()
+  const GYM_ID = '6d52ca68-4f58-436c-a8f3-66933830e2e9'
 
-  const gymId = gymData?.id ?? ''
-
-  // Members live in profiles, filtered by gym_id.
-  // The members table is separate; profiles is the source of truth for imported members.
   const { data: raw, error } = await supabase
     .from('profiles')
-    .select('id, full_name, role, gym_id, created_at, email, phone, instagram, birthday, avatar_url')
-    .eq('gym_id', gymId)
-    .neq('role', 'owner')
-    .order('created_at', { ascending: false })
+    .select('id, full_name, role, gym_id')
+    .eq('gym_id', GYM_ID)
 
   if (error) {
     console.error('Members query error:', error.message)
   }
 
-  type RawProfile = {
-    id: string; full_name: string | null; role: string; gym_id: string
-    created_at: string; email: string | null; phone: string | null
-    instagram: string | null; birthday: string | null; avatar_url: string | null
-  }
+  type RawProfile = { id: string; full_name: string | null; role: string; gym_id: string }
   const members: MemberRow[] = ((raw ?? []) as unknown as RawProfile[]).map(p => ({
     id: p.id,
-    status: 'active' as MemberRow['status'],
-    joined_at: p.created_at,
+    status: (p.role === 'owner' ? 'active' : 'active') as MemberRow['status'],
+    joined_at: new Date().toISOString(),
     expires_at: null,
     profile: {
       id: p.id,
       full_name: p.full_name,
-      email: p.email,
-      phone: p.phone,
-      instagram: p.instagram,
-      birthday: p.birthday,
-      avatar_url: p.avatar_url,
+      email: null,
+      phone: null,
+      instagram: null,
+      birthday: null,
+      avatar_url: null,
     },
   }))
 
