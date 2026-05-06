@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createClient } from '@supabase/supabase-js'
+// Note: uses NEXT_PUBLIC_SUPABASE_ANON_KEY (available in all Vercel envs)
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mailchimp = require('@mailchimp/mailchimp_marketing')
 
@@ -77,11 +78,24 @@ async function handleSync(): Promise<NextResponse> {
   console.log(`[mailchimp/sync] configured with server=${server}`)
 
   // ── 4. Fetch members from Supabase ────────────────────────────────────────
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  )
+  const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  console.log('[mailchimp/sync] supabase env check:', {
+    NEXT_PUBLIC_SUPABASE_URL:      supabaseUrl  ? `set (${supabaseUrl})` : 'MISSING',
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: supabaseAnon ? `set (${supabaseAnon.slice(0, 12)}…)` : 'MISSING',
+  })
+
+  if (!supabaseUrl || !supabaseAnon) {
+    return NextResponse.json(
+      { error: 'Missing Supabase env vars: NEXT_PUBLIC_SUPABASE_URL and/or NEXT_PUBLIC_SUPABASE_ANON_KEY' },
+      { status: 500 }
+    )
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseAnon, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
 
   const { data: profiles, error: dbError } = await supabase
     .from('profiles')
