@@ -29,6 +29,7 @@ export default async function DashboardLayout({
     { href: '/dashboard',              label: 'Overview',    icon: Overview },
     { href: '/dashboard/members',      label: 'Members',     icon: Members },
     { href: '/dashboard/campaigns',    label: 'Campaigns',   icon: Campaigns },
+    { href: '/dashboard/coach',        label: 'AI Coach',    icon: Coach },
     { href: '/dashboard/classes',      label: 'Classes',     icon: Classes },
     { href: '/dashboard/check-ins',    label: 'Check-ins',   icon: Checkins },
     { href: '/dashboard/settings',     label: 'Settings',    icon: Settings },
@@ -104,6 +105,15 @@ function Overview() {
       <rect x="8.5" y="1" width="5.5" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.2"/>
       <rect x="1" y="8.5" width="5.5" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.2"/>
       <rect x="8.5" y="8.5" width="5.5" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.2"/>
+    </svg>
+  )
+}
+function Coach() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" className="opacity-60 group-hover:opacity-100 transition-opacity">
+      <circle cx="7.5" cy="7.5" r="5.5" stroke="currentColor" strokeWidth="1.2"/>
+      <path d="M5 7.5h5M7.5 5v5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+      <path d="M7.5 2V1M7.5 14v-1M2 7.5H1M14 7.5h-1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/>
     </svg>
   )
 }

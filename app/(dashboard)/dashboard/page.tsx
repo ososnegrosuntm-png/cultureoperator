@@ -431,6 +431,40 @@ export default async function DashboardPage() {
           </div>
         </div>
 
+        {/* ── AI Coach strip ───────────────────────────────────────────────── */}
+        <div>
+          <div className="flex items-center gap-6 mb-5">
+            <p className="text-xs tracking-widest uppercase text-ink-muted font-medium shrink-0">AI Coach</p>
+            <div className="h-px flex-1 bg-bone-deeper" />
+          </div>
+          <div className="border border-bone-deeper grid grid-cols-1 sm:grid-cols-3 gap-px bg-bone-deeper">
+            <div className="bg-bone p-8 sm:col-span-2">
+              <p className="text-xs tracking-widest uppercase text-ink-muted font-medium mb-3">Today&apos;s Sample Message</p>
+              <p className="text-sm text-ink font-light leading-relaxed italic">
+                &ldquo;Good morning [Member]. Yesterday you completed a strength session.
+                Your recovery looks good. Today: Push intensity — your body is ready.
+                You&apos;re on day 12 of your streak.&rdquo;
+              </p>
+              <p className="text-xs text-ink-muted mt-4">
+                Personalized for every member · Delivered at 7 AM daily
+              </p>
+            </div>
+            <div className="bg-ink p-8 flex flex-col justify-between">
+              <div>
+                <p className="text-xs tracking-widest uppercase text-gold/60 font-medium mb-3">Schedule</p>
+                <p className="font-serif text-3xl font-bold text-bone">7 AM</p>
+                <p className="text-xs text-bone/40 mt-1">every morning</p>
+              </div>
+              <Link
+                href="/dashboard/coach"
+                className="mt-6 text-xs tracking-widest uppercase font-semibold text-gold hover:text-gold-light transition-colors"
+              >
+                View All Messages →
+              </Link>
+            </div>
+          </div>
+        </div>
+
         {/* ── Footer rule ──────────────────────────────────────────────────── */}
         <div className="flex items-center gap-4 pt-2">
           <div className="h-px flex-1 bg-bone-deeper" />
