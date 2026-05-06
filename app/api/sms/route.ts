@@ -5,7 +5,21 @@ import { createClient } from '@supabase/supabase-js'
 const MSG = (firstName: string) =>
   `Hey ${firstName}, we miss you at Osos Negros! Come back this week — first session is on us. Reply YES to confirm.`
 
-async function sendSMS(to: string, body: string) {
+type TwilioError = {
+  name:      string
+  to:        string
+  http_status: number
+  twilio_code:   number | null
+  twilio_message: string | null
+  twilio_more_info: string | null
+  raw_response: unknown
+}
+
+type SendResult =
+  | { ok: true;  to: string; name: string }
+  | { ok: false; to: string; name: string; error: TwilioError }
+
+async function sendSMS(to: string, body: string): Promise<void> {
   const sid   = process.env.TWILIO_ACCOUNT_SID
   const token = process.env.TWILIO_AUTH_TOKEN
   const from  = process.env.TWILIO_FROM_NUMBER
@@ -24,20 +38,16 @@ async function sendSMS(to: string, body: string) {
   )
 
   if (!res.ok) {
-    // Parse Twilio's JSON error body for the full detail
-    let detail: string
-    try {
-      const json = await res.json() as { message?: string; code?: number; more_info?: string }
-      detail = [
-        `HTTP ${res.status}`,
-        json.message   && `message: ${json.message}`,
-        json.code      && `code: ${json.code}`,
-        json.more_info && `info: ${json.more_info}`,
-      ].filter(Boolean).join(' · ')
-    } catch {
-      detail = `HTTP ${res.status}: ${await res.text()}`
-    }
-    throw new Error(detail)
+    let parsed: Record<string, unknown> = {}
+    try { parsed = await res.json() as Record<string, unknown> } catch { /* non-JSON body */ }
+    const err = Object.assign(new Error(String(parsed.message ?? `HTTP ${res.status}`)), {
+      http_status:       res.status,
+      twilio_code:       parsed.code        ?? null,
+      twilio_message:    parsed.message     ?? null,
+      twilio_more_info:  parsed.more_info   ?? null,
+      raw_response:      parsed,
+    })
+    throw err
   }
 }
 
@@ -63,28 +73,61 @@ export async function POST(req: Request) {
     { auth: { autoRefreshToken: false, persistSession: false } }
   )
 
-  const { data: profiles, error } = await supabase
+  const { data: profiles, error: dbError } = await supabase
     .from('profiles')
     .select('id, full_name, phone')
     .in('id', profileIds)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
 
   let sent = 0, skipped = 0, failed = 0
-  const errors: string[] = []
+  const results: SendResult[] = []
 
   for (const p of profiles ?? []) {
-    if (!p.phone) { skipped++; continue }
+    const name  = (p.full_name as string | null) ?? 'Unknown'
+    const phone = p.phone as string | null
 
-    const firstName = (p.full_name as string | null)?.split(' ')[0]?.trim() || 'there'
+    if (!phone) {
+      skipped++
+      continue
+    }
+
+    const firstName = name.split(' ')[0]?.trim() || 'there'
+
     try {
-      await sendSMS(p.phone, MSG(firstName))
+      await sendSMS(phone, MSG(firstName))
       sent++
+      results.push({ ok: true, to: phone, name })
+      console.log(`[sms] ✓ sent  to=${phone} name=${name}`)
     } catch (err) {
       failed++
-      errors.push(`${p.full_name ?? p.id}: ${err instanceof Error ? err.message : String(err)}`)
+      // Pull the structured fields we attached in sendSMS
+      const e = err as Error & {
+        http_status?: number
+        twilio_code?: number | null
+        twilio_message?: string | null
+        twilio_more_info?: string | null
+        raw_response?: unknown
+      }
+      const errorDetail: TwilioError = {
+        name,
+        to:               phone,
+        http_status:      e.http_status      ?? 0,
+        twilio_code:      e.twilio_code      ?? null,
+        twilio_message:   e.twilio_message   ?? e.message,
+        twilio_more_info: e.twilio_more_info ?? null,
+        raw_response:     e.raw_response     ?? null,
+      }
+      results.push({ ok: false, to: phone, name, error: errorDetail })
+      console.error(`[sms] ✗ failed to=${phone} name=${name}`, errorDetail)
     }
   }
 
-  return NextResponse.json({ sent, skipped, failed, total: sent + skipped + failed, errors })
+  return NextResponse.json({
+    sent,
+    skipped,
+    failed,
+    total: sent + skipped + failed,
+    results,
+  })
 }
