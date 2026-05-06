@@ -23,11 +23,17 @@ function fmtPhone(raw: string | null | undefined) {
   return raw
 }
 
+type SyncState = 'idle' | 'syncing' | 'done' | 'error'
+type SyncResult = { synced: number; updated: number; errored: number; skipped_no_email: number; total_fetched: number }
+
 export function CampaignPanel({ members }: { members: CampaignMember[] }) {
   const [statuses, setStatuses] = useState<Record<string, SendStatus>>({})
   const [sendingAll, setSendingAll] = useState(false)
   const [allResult, setAllResult] = useState<{ sent: number; failed: number } | null>(null)
   const [search, setSearch] = useState('')
+  const [syncState, setSyncState]   = useState<SyncState>('idle')
+  const [syncResult, setSyncResult] = useState<SyncResult | null>(null)
+  const [syncError, setSyncError]   = useState<string | null>(null)
 
   const withPhone  = members.filter(m => m.phone)
   const filtered   = members.filter(m => {
@@ -86,6 +92,22 @@ export function CampaignPanel({ members }: { members: CampaignMember[] }) {
     }
   }, [withPhone])
 
+  const syncToMailchimp = useCallback(async () => {
+    setSyncState('syncing')
+    setSyncResult(null)
+    setSyncError(null)
+    try {
+      const res  = await fetch('/api/mailchimp/sync', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Mailchimp sync failed')
+      setSyncResult(data as SyncResult)
+      setSyncState('done')
+    } catch (err) {
+      setSyncError(err instanceof Error ? err.message : String(err))
+      setSyncState('error')
+    }
+  }, [])
+
   const sentCount   = Object.values(statuses).filter(s => s === 'sent').length
   const failedCount = Object.values(statuses).filter(s => s === 'failed').length
 
@@ -99,7 +121,7 @@ export function CampaignPanel({ members }: { members: CampaignMember[] }) {
           <h2 className="font-serif text-2xl font-bold text-ink mt-0.5">Re-engagement</h2>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-3 shrink-0 flex-wrap justify-end">
           {allResult && (
             <p className="text-xs text-ink-muted">
               {allResult.sent} sent{allResult.failed > 0 ? ` · ${allResult.failed} failed` : ''}
@@ -112,10 +134,40 @@ export function CampaignPanel({ members }: { members: CampaignMember[] }) {
           >
             {sendingAll ? 'Sending…' : `Send All (${withPhone.length})`}
           </button>
+          <button
+            onClick={syncToMailchimp}
+            disabled={syncState === 'syncing'}
+            className="text-xs tracking-widest uppercase font-semibold border border-gold text-gold px-5 py-2.5 hover:bg-gold hover:text-bone transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {syncState === 'syncing' ? 'Syncing…' : 'Sync to Mailchimp'}
+          </button>
         </div>
       </div>
 
       <div className="px-10 py-8 space-y-8">
+
+        {/* ── Mailchimp sync result ───────────────────────────────────────────── */}
+        {syncState === 'done' && syncResult && (
+          <div className="bg-ink px-8 py-5 flex items-center justify-between">
+            <div>
+              <p className="text-xs tracking-widest uppercase text-gold/60 font-medium mb-1">Mailchimp Sync Complete</p>
+              <p className="text-sm text-bone font-light">
+                <span className="font-semibold text-gold">{syncResult.synced}</span> new
+                {' · '}
+                <span className="font-semibold text-bone">{syncResult.updated}</span> updated
+                {syncResult.errored > 0 && <span className="text-[#b45454]"> · {syncResult.errored} errors</span>}
+                {syncResult.skipped_no_email > 0 && <span className="text-bone/40"> · {syncResult.skipped_no_email} skipped (no email)</span>}
+              </p>
+            </div>
+            <button onClick={() => setSyncState('idle')} className="text-bone/30 hover:text-bone transition-colors text-lg leading-none">×</button>
+          </div>
+        )}
+        {syncState === 'error' && syncError && (
+          <div className="bg-[#b45454]/10 border border-[#b45454]/20 px-6 py-4 flex items-center justify-between">
+            <p className="text-sm text-[#b45454]">{syncError}</p>
+            <button onClick={() => setSyncState('idle')} className="text-[#b45454]/50 hover:text-[#b45454] transition-colors text-lg leading-none ml-4">×</button>
+          </div>
+        )}
 
         {/* ── Stats ──────────────────────────────────────────────────────────── */}
         <div className="grid grid-cols-3 gap-px bg-bone-deeper border border-bone-deeper">
