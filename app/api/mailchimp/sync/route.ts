@@ -78,24 +78,27 @@ async function handleSync(): Promise<NextResponse> {
   console.log(`[mailchimp/sync] configured with server=${server}`)
 
   // ── 4. Fetch members from Supabase ────────────────────────────────────────
-  const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const SUPABASE_URL  = 'https://htqwoxkcgkdzeitdmxlx.supabase.co'
+  const supabaseAnon  = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-  console.log('[mailchimp/sync] supabase env check:', {
-    NEXT_PUBLIC_SUPABASE_URL:      supabaseUrl  ? `set (${supabaseUrl})` : 'MISSING',
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: supabaseAnon ? `set (${supabaseAnon.slice(0, 12)}…)` : 'MISSING',
+  console.log('[mailchimp/sync] supabase config:', {
+    url:  SUPABASE_URL,
+    anon_key: supabaseAnon ? `set (${supabaseAnon.slice(0, 20)}…)` : 'MISSING',
   })
 
-  if (!supabaseUrl || !supabaseAnon) {
+  if (!supabaseAnon) {
+    console.error('[mailchimp/sync] NEXT_PUBLIC_SUPABASE_ANON_KEY is not set')
     return NextResponse.json(
-      { error: 'Missing Supabase env vars: NEXT_PUBLIC_SUPABASE_URL and/or NEXT_PUBLIC_SUPABASE_ANON_KEY' },
+      { error: 'Missing env var: NEXT_PUBLIC_SUPABASE_ANON_KEY' },
       { status: 500 }
     )
   }
 
-  const supabase = createClient(supabaseUrl, supabaseAnon, {
+  const supabase = createClient(SUPABASE_URL, supabaseAnon, {
     auth: { autoRefreshToken: false, persistSession: false },
   })
+
+  console.log(`[mailchimp/sync] querying profiles where gym_id=${GYM_ID} role=member…`)
 
   const { data: profiles, error: dbError } = await supabase
     .from('profiles')
@@ -104,12 +107,15 @@ async function handleSync(): Promise<NextResponse> {
     .eq('role', 'member')
 
   if (dbError) {
-    console.error('[mailchimp/sync] db error:', dbError.message)
-    return NextResponse.json({ error: dbError.message }, { status: 500 })
+    console.error('[mailchimp/sync] supabase query error:', dbError.message, dbError)
+    return NextResponse.json({ error: dbError.message, detail: dbError }, { status: 500 })
   }
 
   const totalFetched = profiles?.length ?? 0
-  console.log(`[mailchimp/sync] fetched ${totalFetched} members from db`)
+  console.log(`[mailchimp/sync] fetched ${totalFetched} profiles from supabase`)
+  if (totalFetched > 0) {
+    console.log('[mailchimp/sync] sample row:', JSON.stringify(profiles![0]))
+  }
 
   // ── 5. Build member list — skip rows without an email ─────────────────────
   type MailchimpMember = {
