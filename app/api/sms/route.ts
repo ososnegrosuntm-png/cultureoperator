@@ -1,62 +1,43 @@
 import { NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
 import { createClient } from '@supabase/supabase-js'
+import twilio from 'twilio'
 
 const MSG = (firstName: string) =>
   `Hey ${firstName}, we miss you at Osos Negros! Come back this week — first session is on us. Reply YES to confirm.`
 
-type TwilioError = {
-  name:      string
-  to:        string
-  http_status: number
-  twilio_code:   number | null
-  twilio_message: string | null
-  twilio_more_info: string | null
-  raw_response: unknown
-}
-
-type SendResult =
-  | { ok: true;  to: string; name: string }
-  | { ok: false; to: string; name: string; error: TwilioError }
-
-async function sendSMS(to: string, body: string): Promise<void> {
+export async function POST(req: Request) {
+  // ── 1. Env var diagnostics — logged before anything else ─────────────────
   const sid   = process.env.TWILIO_ACCOUNT_SID
   const token = process.env.TWILIO_AUTH_TOKEN
   const from  = process.env.TWILIO_FROM_NUMBER
-  if (!sid || !token || !from) throw new Error('Twilio env vars not set (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER)')
 
-  const res = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString('base64')}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ To: to, From: from, Body: body }).toString(),
-    }
-  )
+  console.log('[sms] env check:', {
+    TWILIO_ACCOUNT_SID:  sid   ? `set (${sid.slice(0, 6)}…)`   : 'MISSING',
+    TWILIO_AUTH_TOKEN:   token ? `set (${token.slice(0, 6)}…)` : 'MISSING',
+    TWILIO_FROM_NUMBER:  from  ? `set (${from})`               : 'MISSING',
+  })
 
-  if (!res.ok) {
-    let parsed: Record<string, unknown> = {}
-    try { parsed = await res.json() as Record<string, unknown> } catch { /* non-JSON body */ }
-    const err = Object.assign(new Error(String(parsed.message ?? `HTTP ${res.status}`)), {
-      http_status:       res.status,
-      twilio_code:       parsed.code        ?? null,
-      twilio_message:    parsed.message     ?? null,
-      twilio_more_info:  parsed.more_info   ?? null,
-      raw_response:      parsed,
-    })
-    throw err
+  const missing = [
+    !sid   && 'TWILIO_ACCOUNT_SID',
+    !token && 'TWILIO_AUTH_TOKEN',
+    !from  && 'TWILIO_FROM_NUMBER',
+  ].filter(Boolean)
+
+  if (missing.length > 0) {
+    console.error('[sms] aborting — missing env vars:', missing)
+    return NextResponse.json(
+      { error: `Missing Twilio env vars: ${missing.join(', ')}`, missing },
+      { status: 500 }
+    )
   }
-}
 
-export async function POST(req: Request) {
-  // Auth — must be a logged-in gym owner
+  // ── 2. Auth ───────────────────────────────────────────────────────────────
   const userClient = createServerClient()
   const { data: { user } } = await userClient.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  // ── 3. Parse body ─────────────────────────────────────────────────────────
   let profileIds: string[]
   try {
     const body = await req.json()
@@ -66,7 +47,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'profileIds must be a non-empty array' }, { status: 400 })
   }
 
-  // Fetch names + phones server-side — never trust the client with PII
+  console.log(`[sms] request for ${profileIds.length} profile(s)`)
+
+  // ── 4. Fetch names + phones server-side ───────────────────────────────────
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -78,9 +61,21 @@ export async function POST(req: Request) {
     .select('id, full_name, phone')
     .in('id', profileIds)
 
-  if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 })
+  if (dbError) {
+    console.error('[sms] db error:', dbError.message)
+    return NextResponse.json({ error: dbError.message }, { status: 500 })
+  }
 
+  console.log(`[sms] fetched ${profiles?.length ?? 0} profile(s) from db`)
+
+  // ── 5. Send via Twilio SDK ────────────────────────────────────────────────
+  const client = twilio(sid, token)
   let sent = 0, skipped = 0, failed = 0
+
+  type SendResult =
+    | { ok: true;  name: string; to: string; sid: string }
+    | { ok: false; name: string; to: string; http_status: number | null; twilio_code: number | null; twilio_message: string | null; twilio_more_info: string | null }
+
   const results: SendResult[] = []
 
   for (const p of profiles ?? []) {
@@ -88,46 +83,45 @@ export async function POST(req: Request) {
     const phone = p.phone as string | null
 
     if (!phone) {
+      console.log(`[sms] skip ${name} — no phone`)
       skipped++
       continue
     }
 
     const firstName = name.split(' ')[0]?.trim() || 'there'
+    console.log(`[sms] sending to ${name} (${phone})…`)
 
     try {
-      await sendSMS(phone, MSG(firstName))
+      const message = await client.messages.create({
+        to:   phone,
+        from: from!,
+        body: MSG(firstName),
+      })
       sent++
-      results.push({ ok: true, to: phone, name })
-      console.log(`[sms] ✓ sent  to=${phone} name=${name}`)
+      console.log(`[sms] ✓ sent to ${name} (${phone}) — sid: ${message.sid}`)
+      results.push({ ok: true, name, to: phone, sid: message.sid })
     } catch (err) {
       failed++
-      // Pull the structured fields we attached in sendSMS
-      const e = err as Error & {
-        http_status?: number
-        twilio_code?: number | null
-        twilio_message?: string | null
-        twilio_more_info?: string | null
-        raw_response?: unknown
-      }
-      const errorDetail: TwilioError = {
+      const e = err as { status?: number; code?: number; message?: string; moreInfo?: string }
+      console.error(`[sms] ✗ failed ${name} (${phone}):`, {
+        status:   e.status   ?? null,
+        code:     e.code     ?? null,
+        message:  e.message  ?? null,
+        moreInfo: e.moreInfo ?? null,
+      })
+      results.push({
+        ok:               false,
         name,
         to:               phone,
-        http_status:      e.http_status      ?? 0,
-        twilio_code:      e.twilio_code      ?? null,
-        twilio_message:   e.twilio_message   ?? e.message,
-        twilio_more_info: e.twilio_more_info ?? null,
-        raw_response:     e.raw_response     ?? null,
-      }
-      results.push({ ok: false, to: phone, name, error: errorDetail })
-      console.error(`[sms] ✗ failed to=${phone} name=${name}`, errorDetail)
+        http_status:      e.status   ?? null,
+        twilio_code:      e.code     ?? null,
+        twilio_message:   e.message  ?? null,
+        twilio_more_info: e.moreInfo ?? null,
+      })
     }
   }
 
-  return NextResponse.json({
-    sent,
-    skipped,
-    failed,
-    total: sent + skipped + failed,
-    results,
-  })
+  console.log(`[sms] done — sent:${sent} skipped:${skipped} failed:${failed}`)
+
+  return NextResponse.json({ sent, skipped, failed, total: sent + skipped + failed, results })
 }
