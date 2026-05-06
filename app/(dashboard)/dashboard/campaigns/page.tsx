@@ -14,7 +14,7 @@ export default async function CampaignsPage() {
 
   const { data: raw, error } = await supabase
     .from('profiles')
-    .select('id, full_name, phone')
+    .select('id, full_name, phone, email')
     .eq('gym_id', GYM_ID)
     .eq('role', 'member')
     .order('full_name', { ascending: true })

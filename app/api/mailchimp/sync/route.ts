@@ -1,23 +1,22 @@
 import { NextResponse } from 'next/server'
 import { createClient as createServerClient } from '@/lib/supabase/server'
-import { createClient } from '@supabase/supabase-js'
-// Note: uses NEXT_PUBLIC_SUPABASE_ANON_KEY (available in all Vercel envs)
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mailchimp = require('@mailchimp/mailchimp_marketing')
 
-const GYM_ID     = '6d52ca68-4f58-436c-a8f3-66933830e2e9'
 const BATCH_SIZE = 500
 
-/** Strip an unknown value down to a plain JSON-safe object. */
-function sanitize(val: unknown): unknown {
-  try {
-    return JSON.parse(JSON.stringify(val))
-  } catch {
-    return String(val)
-  }
+type IncomingMember = {
+  id: string
+  full_name: string | null
+  email: string | null
+  phone: string | null
 }
 
-/** Pull the fields we care about from a Mailchimp batch error entry. */
+/** Safely convert any value to plain JSON-serializable form. */
+function sanitize(val: unknown): unknown {
+  try { return JSON.parse(JSON.stringify(val)) } catch { return String(val) }
+}
+
 function sanitizeBatchError(e: unknown) {
   if (!e || typeof e !== 'object') return String(e)
   const o = e as Record<string, unknown>
@@ -31,11 +30,8 @@ function sanitizeBatchError(e: unknown) {
 }
 
 export async function POST(req: Request) {
-  void req
-
-  // ── Top-level safety net — guarantees a JSON response on any throw ────────
   try {
-    return await handleSync()
+    return await handleSync(req)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[mailchimp/sync] unhandled error:', msg)
@@ -43,9 +39,26 @@ export async function POST(req: Request) {
   }
 }
 
-async function handleSync(): Promise<NextResponse> {
+async function handleSync(req: Request): Promise<NextResponse> {
 
-  // ── 1. Env var check ──────────────────────────────────────────────────────
+  // ── 1. Auth ───────────────────────────────────────────────────────────────
+  const userClient = createServerClient()
+  const { data: { user } } = await userClient.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // ── 2. Parse members from request body ────────────────────────────────────
+  let members: IncomingMember[]
+  try {
+    const body = await req.json()
+    members = body.members
+    if (!Array.isArray(members) || members.length === 0) throw new Error()
+  } catch {
+    return NextResponse.json({ error: 'Request body must include a non-empty members array' }, { status: 400 })
+  }
+
+  console.log(`[mailchimp/sync] received ${members.length} members from client`)
+
+  // ── 3. Env var check ──────────────────────────────────────────────────────
   const apiKey     = process.env.MAILCHIMP_API_KEY
   const audienceId = process.env.MAILCHIMP_AUDIENCE_ID
 
@@ -60,64 +73,15 @@ async function handleSync(): Promise<NextResponse> {
   ].filter(Boolean)
 
   if (missing.length > 0) {
-    console.error('[mailchimp/sync] aborting — missing env vars:', missing)
-    return NextResponse.json(
-      { error: `Missing env vars: ${missing.join(', ')}`, missing },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: `Missing env vars: ${missing.join(', ')}`, missing }, { status: 500 })
   }
 
-  // ── 2. Auth ───────────────────────────────────────────────────────────────
-  const userClient = createServerClient()
-  const { data: { user } } = await userClient.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  // ── 3. Configure Mailchimp (server prefix extracted from key) ─────────────
+  // ── 4. Configure Mailchimp ────────────────────────────────────────────────
   const server = apiKey!.split('-').pop() ?? 'us2'
   mailchimp.setConfig({ apiKey, server })
-  console.log(`[mailchimp/sync] configured with server=${server}`)
+  console.log(`[mailchimp/sync] configured — server=${server} audience=${audienceId}`)
 
-  // ── 4. Fetch members from Supabase ────────────────────────────────────────
-  const SUPABASE_URL  = 'https://htqwoxkcgkdzeitdmxlx.supabase.co'
-  const supabaseAnon  = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-
-  console.log('[mailchimp/sync] supabase config:', {
-    url:  SUPABASE_URL,
-    anon_key: supabaseAnon ? `set (${supabaseAnon.slice(0, 20)}…)` : 'MISSING',
-  })
-
-  if (!supabaseAnon) {
-    console.error('[mailchimp/sync] NEXT_PUBLIC_SUPABASE_ANON_KEY is not set')
-    return NextResponse.json(
-      { error: 'Missing env var: NEXT_PUBLIC_SUPABASE_ANON_KEY' },
-      { status: 500 }
-    )
-  }
-
-  const supabase = createClient(SUPABASE_URL, supabaseAnon, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
-
-  console.log(`[mailchimp/sync] querying profiles where gym_id=${GYM_ID} role=member…`)
-
-  const { data: profiles, error: dbError } = await supabase
-    .from('profiles')
-    .select('id, full_name, email, phone')
-    .eq('gym_id', GYM_ID)
-    .eq('role', 'member')
-
-  if (dbError) {
-    console.error('[mailchimp/sync] supabase query error:', dbError.message, dbError)
-    return NextResponse.json({ error: dbError.message, detail: dbError }, { status: 500 })
-  }
-
-  const totalFetched = profiles?.length ?? 0
-  console.log(`[mailchimp/sync] fetched ${totalFetched} profiles from supabase`)
-  if (totalFetched > 0) {
-    console.log('[mailchimp/sync] sample row:', JSON.stringify(profiles![0]))
-  }
-
-  // ── 5. Build member list — skip rows without an email ─────────────────────
+  // ── 5. Build member objects — skip rows without email ─────────────────────
   type MailchimpMember = {
     email_address: string
     status_if_new: 'subscribed'
@@ -127,11 +91,11 @@ async function handleSync(): Promise<NextResponse> {
   const toSync: MailchimpMember[] = []
   let skippedNoEmail = 0
 
-  for (const p of profiles ?? []) {
-    const email = ((p.email as string | null) ?? '').trim().toLowerCase()
+  for (const m of members) {
+    const email = (m.email ?? '').trim().toLowerCase()
     if (!email) { skippedNoEmail++; continue }
 
-    const parts = ((p.full_name as string | null) ?? '').trim().split(/\s+/)
+    const parts = (m.full_name ?? '').trim().split(/\s+/)
     toSync.push({
       email_address: email,
       status_if_new: 'subscribed',
@@ -139,7 +103,7 @@ async function handleSync(): Promise<NextResponse> {
         FNAME: parts[0]              ?? '',
         LNAME: parts.slice(1).join(' '),
         EMAIL: email,
-        PHONE: (p.phone as string | null) ?? '',
+        PHONE: (m.phone ?? ''),
       },
     })
   }
@@ -150,7 +114,7 @@ async function handleSync(): Promise<NextResponse> {
     return NextResponse.json({
       synced: 0, updated: 0, errored: 0,
       skipped_no_email: skippedNoEmail,
-      total_fetched: totalFetched,
+      total_received: members.length,
       errors: [],
     })
   }
@@ -162,8 +126,8 @@ async function handleSync(): Promise<NextResponse> {
   const batchErrors: ReturnType<typeof sanitizeBatchError>[] = []
 
   for (let i = 0; i < toSync.length; i += BATCH_SIZE) {
-    const chunk     = toSync.slice(i, i + BATCH_SIZE)
-    const batchNum  = Math.floor(i / BATCH_SIZE) + 1
+    const chunk    = toSync.slice(i, i + BATCH_SIZE)
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1
     console.log(`[mailchimp/sync] batch ${batchNum}: posting ${chunk.length} members…`)
 
     let result: { new_members: unknown[]; updated_members: unknown[]; errors: unknown[] }
@@ -173,10 +137,9 @@ async function handleSync(): Promise<NextResponse> {
         update_existing: true,
       })
     } catch (err) {
-      // Extract what we can from the SDK error — avoid leaking non-serializable objects
-      const e  = err as { status?: number; response?: { body?: unknown }; message?: string }
+      const e    = err as { status?: number; response?: { body?: unknown }; message?: string }
       const body = sanitize(e.response?.body ?? null)
-      console.error('[mailchimp/sync] Mailchimp API error:', { status: e.status, body, message: e.message })
+      console.error('[mailchimp/sync] API error:', { status: e.status, body, message: e.message })
       return NextResponse.json({
         error:          e.message ?? 'Mailchimp API request failed',
         http_status:    e.status  ?? null,
@@ -189,7 +152,6 @@ async function handleSync(): Promise<NextResponse> {
     errored += result.errors?.length          ?? 0
 
     if (result.errors?.length) {
-      // Sanitize each error entry before storing
       batchErrors.push(...result.errors.map(sanitizeBatchError))
       console.error(`[mailchimp/sync] batch ${batchNum} errors:`, batchErrors.slice(-result.errors.length))
     }
@@ -204,7 +166,7 @@ async function handleSync(): Promise<NextResponse> {
     updated,
     errored,
     skipped_no_email: skippedNoEmail,
-    total_fetched:    totalFetched,
+    total_received:   members.length,
     errors:           batchErrors,
   })
 }

@@ -6,6 +6,7 @@ export type CampaignMember = {
   id: string
   full_name: string | null
   phone: string | null
+  email: string | null
 }
 
 type SendStatus = 'idle' | 'sending' | 'sent' | 'failed'
@@ -97,7 +98,11 @@ export function CampaignPanel({ members }: { members: CampaignMember[] }) {
     setSyncResult(null)
     setSyncError(null)
     try {
-      const res  = await fetch('/api/mailchimp/sync', { method: 'POST' })
+      const res  = await fetch('/api/mailchimp/sync', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ members }),
+      })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Mailchimp sync failed')
       setSyncResult(data as SyncResult)
@@ -106,7 +111,7 @@ export function CampaignPanel({ members }: { members: CampaignMember[] }) {
       setSyncError(err instanceof Error ? err.message : String(err))
       setSyncState('error')
     }
-  }, [])
+  }, [members])
 
   const sentCount   = Object.values(statuses).filter(s => s === 'sent').length
   const failedCount = Object.values(statuses).filter(s => s === 'failed').length
