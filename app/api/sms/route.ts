@@ -22,7 +22,23 @@ async function sendSMS(to: string, body: string) {
       body: new URLSearchParams({ To: to, From: from, Body: body }).toString(),
     }
   )
-  if (!res.ok) throw new Error(`Twilio ${res.status}: ${await res.text()}`)
+
+  if (!res.ok) {
+    // Parse Twilio's JSON error body for the full detail
+    let detail: string
+    try {
+      const json = await res.json() as { message?: string; code?: number; more_info?: string }
+      detail = [
+        `HTTP ${res.status}`,
+        json.message   && `message: ${json.message}`,
+        json.code      && `code: ${json.code}`,
+        json.more_info && `info: ${json.more_info}`,
+      ].filter(Boolean).join(' · ')
+    } catch {
+      detail = `HTTP ${res.status}: ${await res.text()}`
+    }
+    throw new Error(detail)
+  }
 }
 
 export async function POST(req: Request) {
@@ -70,5 +86,5 @@ export async function POST(req: Request) {
     }
   }
 
-  return NextResponse.json({ sent, skipped, failed, total: sent + skipped + failed, errors: errors.slice(0, 10) })
+  return NextResponse.json({ sent, skipped, failed, total: sent + skipped + failed, errors })
 }
