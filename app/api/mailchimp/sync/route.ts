@@ -4,13 +4,47 @@ import { createClient } from '@supabase/supabase-js'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mailchimp = require('@mailchimp/mailchimp_marketing')
 
-const GYM_ID      = '6d52ca68-4f58-436c-a8f3-66933830e2e9'
-const BATCH_SIZE  = 500   // Mailchimp batch limit
+const GYM_ID     = '6d52ca68-4f58-436c-a8f3-66933830e2e9'
+const BATCH_SIZE = 500
+
+/** Strip an unknown value down to a plain JSON-safe object. */
+function sanitize(val: unknown): unknown {
+  try {
+    return JSON.parse(JSON.stringify(val))
+  } catch {
+    return String(val)
+  }
+}
+
+/** Pull the fields we care about from a Mailchimp batch error entry. */
+function sanitizeBatchError(e: unknown) {
+  if (!e || typeof e !== 'object') return String(e)
+  const o = e as Record<string, unknown>
+  return {
+    email_address: o.email_address ?? null,
+    error_code:    o.error_code    ?? null,
+    error:         o.error         ?? null,
+    field:         o.field         ?? null,
+    field_message: o.field_message ?? null,
+  }
+}
 
 export async function POST(req: Request) {
-  void req   // no body needed — we fetch all members ourselves
+  void req
 
-  // ── 1. Env var check ─────────────────────────────────────────────────────
+  // ── Top-level safety net — guarantees a JSON response on any throw ────────
+  try {
+    return await handleSync()
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[mailchimp/sync] unhandled error:', msg)
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+}
+
+async function handleSync(): Promise<NextResponse> {
+
+  // ── 1. Env var check ──────────────────────────────────────────────────────
   const apiKey     = process.env.MAILCHIMP_API_KEY
   const audienceId = process.env.MAILCHIMP_AUDIENCE_ID
 
@@ -26,7 +60,10 @@ export async function POST(req: Request) {
 
   if (missing.length > 0) {
     console.error('[mailchimp/sync] aborting — missing env vars:', missing)
-    return NextResponse.json({ error: `Missing env vars: ${missing.join(', ')}`, missing }, { status: 500 })
+    return NextResponse.json(
+      { error: `Missing env vars: ${missing.join(', ')}`, missing },
+      { status: 500 }
+    )
   }
 
   // ── 2. Auth ───────────────────────────────────────────────────────────────
@@ -34,10 +71,12 @@ export async function POST(req: Request) {
   const { data: { user } } = await userClient.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // ── 3. Configure Mailchimp ────────────────────────────────────────────────
-  mailchimp.setConfig({ apiKey, server: 'us2' })
+  // ── 3. Configure Mailchimp (server prefix extracted from key) ─────────────
+  const server = apiKey!.split('-').pop() ?? 'us2'
+  mailchimp.setConfig({ apiKey, server })
+  console.log(`[mailchimp/sync] configured with server=${server}`)
 
-  // ── 4. Fetch all members from Supabase ────────────────────────────────────
+  // ── 4. Fetch members from Supabase ────────────────────────────────────────
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -55,88 +94,87 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: dbError.message }, { status: 500 })
   }
 
-  console.log(`[mailchimp/sync] fetched ${profiles?.length ?? 0} members from db`)
+  const totalFetched = profiles?.length ?? 0
+  console.log(`[mailchimp/sync] fetched ${totalFetched} members from db`)
 
-  // ── 5. Build Mailchimp member objects ─────────────────────────────────────
+  // ── 5. Build member list — skip rows without an email ─────────────────────
   type MailchimpMember = {
     email_address: string
-    status_if_new: string
+    status_if_new: 'subscribed'
     merge_fields: { FNAME: string; LNAME: string; EMAIL: string; PHONE: string }
   }
 
-  const members: MailchimpMember[] = []
-  const skippedNoEmail: string[]   = []
+  const toSync: MailchimpMember[] = []
+  let skippedNoEmail = 0
 
   for (const p of profiles ?? []) {
-    const email    = (p.email as string | null)?.trim().toLowerCase()
-    const fullName = (p.full_name as string | null) ?? ''
-    const parts    = fullName.trim().split(/\s+/)
-    const fname    = parts[0]        ?? ''
-    const lname    = parts.slice(1).join(' ') ?? ''
-    const phone    = (p.phone as string | null) ?? ''
+    const email = ((p.email as string | null) ?? '').trim().toLowerCase()
+    if (!email) { skippedNoEmail++; continue }
 
-    if (!email) {
-      skippedNoEmail.push(fullName || p.id)
-      continue
-    }
-
-    members.push({
+    const parts = ((p.full_name as string | null) ?? '').trim().split(/\s+/)
+    toSync.push({
       email_address: email,
       status_if_new: 'subscribed',
-      merge_fields: { FNAME: fname, LNAME: lname, EMAIL: email, PHONE: phone },
+      merge_fields: {
+        FNAME: parts[0]              ?? '',
+        LNAME: parts.slice(1).join(' '),
+        EMAIL: email,
+        PHONE: (p.phone as string | null) ?? '',
+      },
     })
   }
 
-  console.log(`[mailchimp/sync] ${members.length} with email, ${skippedNoEmail.length} skipped (no email)`)
+  console.log(`[mailchimp/sync] ${toSync.length} with email, ${skippedNoEmail} skipped (no email)`)
 
-  if (members.length === 0) {
+  if (toSync.length === 0) {
     return NextResponse.json({
       synced: 0, updated: 0, errored: 0,
-      skipped_no_email: skippedNoEmail.length,
-      total_fetched: profiles?.length ?? 0,
+      skipped_no_email: skippedNoEmail,
+      total_fetched: totalFetched,
       errors: [],
     })
   }
 
-  // ── 6. Batch upsert in chunks of 500 ─────────────────────────────────────
+  // ── 6. Batch upsert ───────────────────────────────────────────────────────
   let synced  = 0
   let updated = 0
   let errored = 0
-  const batchErrors: unknown[] = []
+  const batchErrors: ReturnType<typeof sanitizeBatchError>[] = []
 
-  for (let i = 0; i < members.length; i += BATCH_SIZE) {
-    const chunk = members.slice(i, i + BATCH_SIZE)
-    console.log(`[mailchimp/sync] posting batch ${Math.floor(i / BATCH_SIZE) + 1} (${chunk.length} members)…`)
+  for (let i = 0; i < toSync.length; i += BATCH_SIZE) {
+    const chunk     = toSync.slice(i, i + BATCH_SIZE)
+    const batchNum  = Math.floor(i / BATCH_SIZE) + 1
+    console.log(`[mailchimp/sync] batch ${batchNum}: posting ${chunk.length} members…`)
 
+    let result: { new_members: unknown[]; updated_members: unknown[]; errors: unknown[] }
     try {
-      const result = await mailchimp.lists.batchListMembers(audienceId, {
-        members: chunk,
+      result = await mailchimp.lists.batchListMembers(audienceId, {
+        members:         chunk,
         update_existing: true,
-      }) as { new_members: unknown[]; updated_members: unknown[]; errors: unknown[] }
-
-      synced  += result.new_members?.length     ?? 0
-      updated += result.updated_members?.length ?? 0
-      errored += result.errors?.length          ?? 0
-
-      if (result.errors?.length) {
-        batchErrors.push(...result.errors)
-        console.error('[mailchimp/sync] batch errors:', result.errors)
-      }
-
-      console.log(`[mailchimp/sync] batch done — new:${result.new_members?.length} updated:${result.updated_members?.length} errors:${result.errors?.length}`)
-    } catch (err) {
-      const e = err as { status?: number; response?: { body?: unknown }; message?: string }
-      console.error('[mailchimp/sync] batch request failed:', {
-        status:  e.status,
-        body:    e.response?.body,
-        message: e.message,
       })
+    } catch (err) {
+      // Extract what we can from the SDK error — avoid leaking non-serializable objects
+      const e  = err as { status?: number; response?: { body?: unknown }; message?: string }
+      const body = sanitize(e.response?.body ?? null)
+      console.error('[mailchimp/sync] Mailchimp API error:', { status: e.status, body, message: e.message })
       return NextResponse.json({
-        error:          e.message ?? 'Mailchimp request failed',
+        error:          e.message ?? 'Mailchimp API request failed',
         http_status:    e.status  ?? null,
-        mailchimp_body: e.response?.body ?? null,
-      }, { status: 500 })
+        mailchimp_body: body,
+      }, { status: 502 })
     }
+
+    synced  += result.new_members?.length     ?? 0
+    updated += result.updated_members?.length ?? 0
+    errored += result.errors?.length          ?? 0
+
+    if (result.errors?.length) {
+      // Sanitize each error entry before storing
+      batchErrors.push(...result.errors.map(sanitizeBatchError))
+      console.error(`[mailchimp/sync] batch ${batchNum} errors:`, batchErrors.slice(-result.errors.length))
+    }
+
+    console.log(`[mailchimp/sync] batch ${batchNum} done — new:${result.new_members?.length} updated:${result.updated_members?.length} errors:${result.errors?.length}`)
   }
 
   console.log(`[mailchimp/sync] complete — synced:${synced} updated:${updated} errored:${errored}`)
@@ -145,8 +183,8 @@ export async function POST(req: Request) {
     synced,
     updated,
     errored,
-    skipped_no_email: skippedNoEmail.length,
-    total_fetched:    profiles?.length ?? 0,
+    skipped_no_email: skippedNoEmail,
+    total_fetched:    totalFetched,
     errors:           batchErrors,
   })
 }
