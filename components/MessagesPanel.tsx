@@ -28,6 +28,8 @@ type Props = {
   ownerId: string
 }
 
+type InviteState = 'idle' | 'sending' | 'sent' | 'already_active' | 'no_email' | 'error'
+
 function initials(name: string | null | undefined) {
   if (!name) return '?'
   return name.split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
@@ -119,6 +121,8 @@ export function MessagesPanel({
   )
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
+  const [inviteStates, setInviteStates] = useState<Record<string, InviteState>>({})
+  const [inviteErrors, setInviteErrors] = useState<Record<string, string>>({})
   const threadRef = useRef<HTMLDivElement>(null)
   const supabase = createClient()
 
@@ -236,6 +240,37 @@ export function MessagesPanel({
       setBody(text) // restore on error
     }
     setSending(false)
+  }
+
+  // ── Invite ─────────────────────────────────────────────────────────────────
+  async function sendInvite(contactId: string) {
+    const contact = contacts.find(c => c.id === contactId)
+    if (!contact) return
+    if (!contact.email) {
+      setInviteStates(p => ({ ...p, [contactId]: 'no_email' }))
+      return
+    }
+    setInviteStates(p => ({ ...p, [contactId]: 'sending' }))
+    setInviteErrors(p => { const n = { ...p }; delete n[contactId]; return n })
+    try {
+      const res  = await fetch('/api/invite', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ profileId: contactId }),
+      })
+      const data = await res.json()
+      if (data.already_active) {
+        setInviteStates(p => ({ ...p, [contactId]: 'already_active' }))
+      } else if (!res.ok) {
+        setInviteStates(p => ({ ...p, [contactId]: 'error' }))
+        setInviteErrors(p => ({ ...p, [contactId]: data.error ?? 'Invite failed' }))
+      } else {
+        setInviteStates(p => ({ ...p, [contactId]: 'sent' }))
+      }
+    } catch {
+      setInviteStates(p => ({ ...p, [contactId]: 'error' }))
+      setInviteErrors(p => ({ ...p, [contactId]: 'Network error' }))
+    }
   }
 
   // ── Member view (single thread, no sidebar) ────────────────────────────────
@@ -368,12 +403,54 @@ export function MessagesPanel({
                   {initials(activeContact?.full_name)}
                 </span>
               </div>
-              <div>
+              <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-ink">
                   {activeContact?.full_name ?? 'Member'}
                 </p>
                 <p className="text-xs text-ink-muted">{activeContact?.email ?? ''}</p>
               </div>
+
+              {/* ── Invite button ── */}
+              {selectedId && (() => {
+                const st  = inviteStates[selectedId] ?? (activeContact?.email ? 'idle' : 'no_email')
+                const err = inviteErrors[selectedId]
+                if (st === 'sent') return (
+                  <span className="text-xs font-semibold text-gold tracking-wide shrink-0">
+                    Invitation sent ✓
+                  </span>
+                )
+                if (st === 'already_active') return (
+                  <span className="text-xs text-ink-muted tracking-wide shrink-0">
+                    Already has account
+                  </span>
+                )
+                if (st === 'no_email') return (
+                  <span className="text-xs text-ink-muted/50 tracking-wide shrink-0">
+                    No email on file
+                  </span>
+                )
+                if (st === 'error') return (
+                  <div className="shrink-0 text-right">
+                    <button
+                      onClick={() => sendInvite(selectedId)}
+                      className="text-xs font-semibold text-[#b45454] hover:underline tracking-wide"
+                      title={err}
+                    >
+                      Failed — retry?
+                    </button>
+                    {err && <p className="text-[10px] text-[#b45454]/70 mt-0.5 max-w-[180px] truncate">{err}</p>}
+                  </div>
+                )
+                return (
+                  <button
+                    onClick={() => sendInvite(selectedId)}
+                    disabled={st === 'sending'}
+                    className="shrink-0 text-xs tracking-widest uppercase font-semibold border border-gold text-gold px-4 py-2 hover:bg-gold hover:text-bone transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {st === 'sending' ? 'Inviting…' : 'Invite to app'}
+                  </button>
+                )
+              })()}
             </div>
 
             {/* Messages */}
