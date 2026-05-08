@@ -34,6 +34,7 @@ export default async function DashboardLayout({
     { href: '/dashboard/syndicate',    label: 'Syndicate',   icon: Syndicate },
     { href: '/dashboard/classes',      label: 'Classes',     icon: Classes },
     { href: '/dashboard/check-ins',    label: 'Check-ins',   icon: Checkins },
+    { href: '/dashboard/billing',       label: 'Billing',     icon: Billing },
     { href: '/dashboard/settings',     label: 'Settings',    icon: Settings },
   ]
 
@@ -174,6 +175,15 @@ function MessagesIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 15 15" fill="none" className="opacity-60 group-hover:opacity-100 transition-opacity">
       <path d="M1 2.5C1 1.948 1.448 1.5 2 1.5h11c.552 0 1 .448 1 1v8c0 .552-.448 1-1 1H5l-4 3V2.5z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/>
+    </svg>
+  )
+}
+function Billing() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" className="opacity-60 group-hover:opacity-100 transition-opacity">
+      <rect x="1" y="3.5" width="13" height="9" rx="0.75" stroke="currentColor" strokeWidth="1.2"/>
+      <path d="M1 6.5h13" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+      <path d="M4 9.5h3M10 9.5h1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
     </svg>
   )
 }
