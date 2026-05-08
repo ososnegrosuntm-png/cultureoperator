@@ -1,3 +1,4 @@
+// Billing page — Stripe subscription plans for gym owners
 import { createClient } from '@/lib/supabase/server'
 import { redirect }     from 'next/navigation'
 import { BillingPanel } from '@/components/BillingPanel'
