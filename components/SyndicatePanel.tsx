@@ -44,6 +44,7 @@ type Props = {
 
 type SendState = 'idle' | 'sending' | 'sent' | 'error'
 type CoachKey = 'atlas' | 'iron' | 'forge' | 'haven' | 'apex' | 'compass'
+type GenState  = 'idle' | 'generating' | 'done' | 'error'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function initials(name: string) {
@@ -233,6 +234,14 @@ export function SyndicatePanel({ currentUserId, gymId, members, gymInsight }: Pr
   const [sendingAll, setSendingAll] = useState<CoachKey | 'all' | null>(null)
   const [weekSending, setWeekSending] = useState<CoachKey | null>(null)
 
+  // AI generate states + messages per coach/member
+  const [genStates, setGenStates] = useState<Record<CoachKey, Record<string, GenState>>>({
+    atlas: {}, iron: {}, forge: {}, haven: {}, apex: {}, compass: {},
+  })
+  const [aiMessages, setAiMessages] = useState<Record<CoachKey, Record<string, string>>>({
+    atlas: {}, iron: {}, forge: {}, haven: {}, apex: {}, compass: {},
+  })
+
   // Search per coach
   const [search, setSearch] = useState<Record<CoachKey, string>>({
     atlas: '', iron: '', forge: '', haven: '', apex: '', compass: '',
@@ -294,6 +303,52 @@ export function SyndicatePanel({ currentUserId, gymId, members, gymInsight }: Pr
     setWeekSending(null)
   }
 
+  async function generateMessage(m: MemberInsight, coach: CoachKey) {
+    const coachName = coach.toUpperCase()
+    setGenStates(p => ({ ...p, [coach]: { ...p[coach], [m.profileId]: 'generating' } }))
+
+    try {
+      const metrics: Record<string, unknown> = {
+        daysSinceLast:             m.daysSinceLast,
+        checkInsThisMonth:         m.checkInsThisMonth,
+        checkInsLast7Days:         m.checkInsLast7Days,
+        atlasIntensity:            m.atlasIntensity,
+        streak:                    m.streak,
+        disciplineScore:           m.disciplineScore,
+        nutritionScore:            m.nutritionScore,
+        weeklyNutritionCompliance: m.weeklyNutritionCompliance,
+        recoveryScore:             m.recoveryScore,
+        overtrained:               m.overtrained,
+        deloadNeeded:              m.deloadNeeded,
+        // APEX gym-level (pass what we have)
+        totalMembers:     gymInsight.totalMembers,
+        activeThisMonth:  gymInsight.activeThisMonth,
+        estimatedMRR:     gymInsight.estimatedMRR,
+        mrrGrowth:        gymInsight.mrrGrowth,
+        unconvertedLeads: gymInsight.unconvertedLeads,
+        churnCount:       gymInsight.churningMembers.length,
+      }
+
+      const res  = await fetch('/api/syndicate/generate', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ coachName, memberName: m.name, metrics }),
+      })
+      const data = await res.json()
+
+      if (!res.ok || !data.message) {
+        setGenStates(p => ({ ...p, [coach]: { ...p[coach], [m.profileId]: 'error' } }))
+        return
+      }
+
+      setAiMessages(p => ({ ...p, [coach]: { ...p[coach], [m.profileId]: data.message } }))
+      setGenStates(p => ({ ...p, [coach]: { ...p[coach], [m.profileId]: 'done' } }))
+
+    } catch {
+      setGenStates(p => ({ ...p, [coach]: { ...p[coach], [m.profileId]: 'error' } }))
+    }
+  }
+
   async function sendAllDaily() {
     setSendingAll('all')
     for (const m of members) {
@@ -321,6 +376,37 @@ export function SyndicatePanel({ currentUserId, gymId, members, gymInsight }: Pr
     )
   }
 
+  function GenerateBtn({ m, coach }: { m: MemberInsight; coach: CoachKey }) {
+    const gs = genStates[coach][m.profileId] ?? 'idle'
+    if (gs === 'generating') return (
+      <span className="text-[10px] text-ink-muted tracking-wide flex items-center gap-1">
+        <span className="inline-block w-2.5 h-2.5 border border-ink-muted/40 border-t-gold rounded-full animate-spin" />
+        AI
+      </span>
+    )
+    if (gs === 'done') return (
+      <span className="text-[10px] font-semibold text-gold tracking-wide">✦ Ready</span>
+    )
+    if (gs === 'error') return (
+      <span
+        title="Retry"
+        onClick={() => generateMessage(m, coach)}
+        className="text-[10px] font-semibold text-[#b45454] tracking-wide cursor-pointer"
+      >
+        ✦ Retry
+      </span>
+    )
+    return (
+      <button
+        onClick={() => generateMessage(m, coach)}
+        className="text-[10px] tracking-widest uppercase font-semibold text-ink-muted/50 hover:text-gold transition-colors opacity-0 group-hover:opacity-100"
+        title="Generate AI message grounded in knowledge base"
+      >
+        ✦ AI
+      </button>
+    )
+  }
+
   // ── Filtered lists ──────────────────────────────────────────────────────
   function filtered(coach: CoachKey) {
     const q = search[coach].toLowerCase().trim()
@@ -334,6 +420,10 @@ export function SyndicatePanel({ currentUserId, gymId, members, gymInsight }: Pr
     m: MemberInsight; coach: CoachKey
     meta: string; badge: React.ReactNode; msg: string
   }) {
+    const aiMsg     = aiMessages[coach][m.profileId]
+    const activeMsg = aiMsg ?? msg
+    const isAI      = !!aiMsg
+
     return (
       <div className="flex items-center gap-4 px-6 py-3 hover:bg-bone-dark transition-colors group">
         <div className="w-8 h-8 rounded-full bg-ink flex items-center justify-center shrink-0">
@@ -344,9 +434,13 @@ export function SyndicatePanel({ currentUserId, gymId, members, gymInsight }: Pr
           <p className="text-[10px] text-ink-muted mt-0.5">{meta}</p>
         </div>
         <div className="shrink-0 w-20">{badge}</div>
-        <p className="flex-1 text-xs text-ink-muted truncate min-w-0">{msg}</p>
-        <div className="shrink-0 w-16 text-right">
-          <SendBtn profileId={m.profileId} body={msg} coach={coach} />
+        <p className={`flex-1 text-xs truncate min-w-0 ${isAI ? 'text-gold/80 font-medium' : 'text-ink-muted'}`}>
+          {isAI && <span className="text-[9px] text-gold/60 mr-1">✦</span>}
+          {activeMsg}
+        </p>
+        <div className="shrink-0 flex items-center gap-3 justify-end">
+          <GenerateBtn m={m} coach={coach} />
+          <SendBtn profileId={m.profileId} body={activeMsg} coach={coach} />
         </div>
       </div>
     )
